@@ -6,6 +6,9 @@ import seaborn as sns
 import pandas as pd
 import numpy as np
 import warnings
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 
 warnings.filterwarnings("ignore")
 sns.set(style="whitegrid", palette="pastel")
@@ -444,5 +447,128 @@ def plot_numeric_categorical_correlation_matrix(df, numeric_features, categorica
     plt.title("Cramér's V Correlation Matrix (Numeric vs Categorical Features)", fontsize=14, pad=12)
     plt.xlabel("Categorical Features")
     plt.ylabel("Numeric Features (Discretized)")
+    plt.tight_layout()
+    plt.show()
+
+
+# ------- Dimensionality Reduction ------- #
+
+def plot_pca_projection(df, categorical_features, target_col='Target'):
+    '''
+    perform PCA dimensionality reduction and visualize the 2D projection.
+    filters out 'Enrolled' target values and uses only numerical features.
+    args:
+        df (pd.DataFrame)
+        categorical_features (list): list of categorical feature names to exclude.
+        target_col (str): name of the target column (default='Target').
+    '''
+    # Filter data
+    df_filtered = df[df[target_col] != 'Enrolled'].copy()
+    remove_columns = categorical_features + [target_col]
+    
+    # Separate features and target
+    X = df_filtered.drop(columns=remove_columns)
+    y = df_filtered[target_col]
+    
+    # Scale the features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    # Apply PCA
+    pca = PCA(n_components=2, random_state=42)
+    X_pca = pca.fit_transform(X_scaled)
+    
+    # Create DataFrame for plotting
+    df_pca = pd.DataFrame(
+        data=X_pca,
+        columns=['PC1', 'PC2']
+    )
+    df_pca[target_col] = y.values
+    
+    # Print explained variance
+    print(f"Explained variance by PC1: {pca.explained_variance_ratio_[0]:.2%}")
+    print(f"Explained variance by PC2: {pca.explained_variance_ratio_[1]:.2%}")
+    print(f"Total variance explained by 2 components: {np.sum(pca.explained_variance_ratio_):.2%}")
+    
+    # Plot PCA results
+    plt.figure(figsize=(12, 8))
+    sns.scatterplot(
+        data=df_pca,
+        x='PC1',
+        y='PC2',
+        hue=target_col,
+        palette=['#d9534f', '#5cb85c'],
+        alpha=0.7,
+        s=50
+    )
+    plt.title('PCA 2D Projection of Student Data', fontsize=16, pad=20)
+    plt.xlabel('Principal Component 1', fontsize=12)
+    plt.ylabel('Principal Component 2', fontsize=12)
+    plt.legend(title='Outcome', bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.show()
+
+def plot_tsne_projection(df, categorical_features, target_col='Target', n_pca_components=50, perplexity=30):
+    '''
+    perform t-SNE dimensionality reduction and visualize the 2D projection.
+    filters out 'Enrolled' target values and uses only numerical features.
+    applies PCA first to reduce noise and speed up computation.
+    args:
+        df (pd.DataFrame)
+        categorical_features (list): list of categorical feature names to exclude.
+        target_col (str): name of the target column (default='Target').
+        n_pca_components (int): number of PCA components to compute before t-SNE (default=50).
+        perplexity (int): perplexity parameter for t-SNE (default=30).
+    '''
+    print("--- Running t-SNE ---")
+    
+    # Filter data
+    df_filtered = df[df[target_col] != 'Enrolled'].copy()
+    remove_columns = categorical_features + [target_col]
+    
+    # Separate features and target
+    X = df_filtered.drop(columns=remove_columns)
+    y = df_filtered[target_col]
+    
+    # Scale the features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    # Apply PCA first to reduce dimensionality
+    n_components = min(n_pca_components, X_scaled.shape[0], X_scaled.shape[1])
+    X_pca_for_tsne = PCA(n_components=n_components, random_state=42).fit_transform(X_scaled)
+    
+    # Apply t-SNE
+    tsne = TSNE(
+        n_components=2,
+        perplexity=perplexity,
+        random_state=42,
+        init='pca',
+        learning_rate='auto'
+    )
+    X_tsne = tsne.fit_transform(X_pca_for_tsne)
+    
+    # Create DataFrame for plotting
+    df_tsne = pd.DataFrame(
+        data=X_tsne,
+        columns=['t-SNE 1', 't-SNE 2']
+    )
+    df_tsne[target_col] = y.values
+    
+    # Plot t-SNE results
+    plt.figure(figsize=(12, 8))
+    sns.scatterplot(
+        data=df_tsne,
+        x='t-SNE 1',
+        y='t-SNE 2',
+        hue=target_col,
+        palette=['#d9534f', '#5cb85c'],
+        alpha=0.7,
+        s=50
+    )
+    plt.title('t-SNE 2D Projection of Student Data', fontsize=16, pad=20)
+    plt.xlabel('t-SNE Component 1', fontsize=12)
+    plt.ylabel('t-SNE Component 2', fontsize=12)
+    plt.legend(title='Outcome', bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
     plt.show()
