@@ -1,5 +1,14 @@
 from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import r2_score
+from sklearn.inspection import PartialDependenceDisplay
 from xgboost import XGBClassifier
+from alibi.explainers import AnchorTabular
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import shap
 import joblib
 import os
 
@@ -72,3 +81,178 @@ def train_xgb_pipeline(X_train, X_test, y_train, y_test):
     save_for_xai(model, X_train, X_test, y_train, y_test, save_dir="src/xgb_model")
 
     return model
+
+
+
+# ============================================================
+# EXPLAINABILITY WITH SURROGATE MODEL
+# ============================================================
+def surrogate_model_from_xgb(model, X_train):
+
+    y_pred_train_xgb = model.predict(X_train)
+
+    surrogate_model = DecisionTreeClassifier(max_depth=4)
+    surrogate_model.fit(X_train, y_pred_train_xgb)
+
+    return surrogate_model
+
+def evaluate_surrogate_model(model, surrogate_model, X_test):
+    y_pred_xgb = model.predict(X_test)
+    y_pred_surrogate = surrogate_model.predict(X_test)
+
+    print("\n=== Surrogate Model Classification Report ===")
+    print(classification_report(y_pred_xgb, y_pred_surrogate))
+
+    print("\n=== Surrogate Model Confusion Matrix ===")
+    print(confusion_matrix(y_pred_xgb, y_pred_surrogate))
+
+    print("\n=== R2 Score ===")
+    r2 = r2_score(y_pred_xgb, y_pred_surrogate)
+    print(f"R² (fidelity) of the surrogate model: {r2:.4f}")
+
+    print("\n=== Agreement Rate ===")
+    N = len(y_pred_surrogate)
+    agreement = np.sum(y_pred_surrogate == y_pred_xgb) / N
+    print(f"Agreement Rate: {agreement}")
+
+
+def plot_surrogate_tree(surrogate_model, feature_names):
+    from matplotlib import pyplot as plt
+    from sklearn.tree import plot_tree
+
+    plt.figure(figsize=(20, 10))
+    plot_tree(surrogate_model, feature_names=feature_names, class_names=['Dropout', 'Graduate'], filled=True)
+    plt.title('Surrogate Decision Tree')
+    plt.show()
+
+
+
+# ============================================================
+# FEATURE IMPORTANCE
+# ============================================================
+def feature_importance(model, feature_names):
+    """
+    Extracts and prints feature importance from the model.
+    """
+    importances = model.feature_importances_
+    feature_importance_df = pd.DataFrame({
+        'Feature': feature_names,
+        'Importance': importances
+    }).sort_values(by='Importance', ascending=False)
+    
+    print(feature_importance_df)
+    return feature_importance_df
+
+def plot_feature_importance(feature_importance_df):
+    
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x='Importance', y='Feature', data=feature_importance_df)
+    plt.title('Feature Importance')
+    plt.show()
+
+# ============================================================
+# Partial Dependence Plots (PDP)
+# ============================================================
+
+def plot_pdp(model, X_train, features_to_plot):
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    PartialDependenceDisplay.from_estimator(
+        model,
+        X_train,
+        features=features_to_plot,
+        feature_names=X_train.columns,
+        ax=ax
+    )
+    plt.suptitle('Partial Dependence Plots')
+    plt.show()
+
+
+def plot_pdp_interaction(model, X_train, features_to_plot):
+    
+    fig, ax = plt.subplots(figsize=(12, 8))
+    PartialDependenceDisplay.from_estimator(
+        model,
+        X_train,
+        features=features_to_plot,
+        feature_names=X_train.columns,
+        grid_resolution=50,
+        ax=ax
+    )
+    plt.suptitle("Partial Dependence Plot for Feature Interaction")
+    plt.tight_layout()
+    plt.show()
+
+
+# ============================================================
+# SHAP
+# ============================================================
+def apply_shap(model, X_train):
+
+    # Create a SHAP explainer for the XGBoost model
+    explainer = shap.TreeExplainer(model)
+
+    # Compute SHAP values for the subset
+    shap_values = explainer.shap_values(X_train)
+
+    return shap_values, explainer
+
+
+def plot_shap_instance(shap_values, explainer, X_train, instance_index):
+
+    instance = X_train.loc[instance_index]
+    print(instance)
+    print("Target = ", y_train.loc[instance_index])
+    
+    shap.waterfall_plot(
+        shap.Explanation(
+            values=shap_values[instance_index],
+            base_values=explainer.expected_value, 
+            data=instance.values,  
+            feature_names=X_train.columns 
+        ),
+        max_display=15
+    )
+
+
+# ============================================================
+# ANCHOR EXPLANATIONS
+# ============================================================
+def apply_anchor(model, X_train, X_test, instance_index=0):
+
+    # Identify categorical columns
+    categorical_columns = X_train.select_dtypes(include=['object', 'category']).columns
+    
+    feature_names = X_train.columns.tolist()
+    
+    # Create category map for AnchorTabular
+    # {col_index: [list of unique values]}
+    category_map = {
+        i: X_train[col].unique().tolist() 
+        for i, col in enumerate(feature_names) 
+        if col in categorical_columns
+    }
+
+    # Define predictor
+    predictor = lambda x: model.predict(x)
+
+    # Initialize explainer
+    explainer = AnchorTabular(predictor, feature_names, categorical_names=category_map, seed=42)
+
+    # Fit explainer
+    #print("Fitting Anchor Explainer...")
+    explainer.fit(X_train.to_numpy(), disc_perc=[25, 50, 75])
+
+    # Select instance
+    instance = X_test.iloc[instance_index].to_numpy().reshape(1, -1)
+
+    # Explain
+    print(f"Explaining instance {instance_index}...")
+    explanation = explainer.explain(instance)
+
+    print(f"\n=== Anchor Explanation for instance {instance_index} ===")
+    print("Anchor: %s" % explanation.anchor)
+    print("Precision: %.2f" % explanation.precision)
+    print("Coverage: %.2f" % explanation.coverage)
+
+    return explanation
