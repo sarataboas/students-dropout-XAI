@@ -3,7 +3,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import r2_score
 from sklearn.inspection import PartialDependenceDisplay
 from xgboost import XGBClassifier
-from alibi.explainers import AnchorTabular
+#from alibi.explainers import AnchorTabular
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -162,8 +162,10 @@ def plot_pdp(model, X_train, features_to_plot):
         X_train,
         features=features_to_plot,
         feature_names=X_train.columns,
+        response_method="predict_proba",   # ← IMPORTANT FIX
         ax=ax
     )
+
     plt.suptitle('Partial Dependence Plots')
     plt.show()
 
@@ -256,3 +258,168 @@ def apply_anchor(model, X_train, X_test, instance_index=0):
     print("Coverage: %.2f" % explanation.coverage)
 
     return explanation
+
+# ============================================================
+# COUNTERFACTUAL EXPLANATIONS
+# ============================================================
+
+def pretty_print_cfs(cf_df, features_varied, label, model, original_instance):
+    """
+    Prints CFs only when the outcome changed.
+    Requires model + original instance to compare predictions.
+    """
+    if cf_df.empty:
+        print(f"\n[{label}] No counterfactuals generated.\n")
+        return
+    
+    shown_df = cf_df[features_varied + ['Target']].copy()
+
+    # Original prediction
+    orig_pred = int(model.predict(original_instance)[0])
+
+    # Check whether CF flips the prediction
+    unique_targets = shown_df['Target'].unique()
+    if len(unique_targets) == 1 and int(unique_targets[0]) == orig_pred:
+        print(f"\n[{label}] ⚠️ No actionable change found.")
+        print("The counterfactuals did NOT flip the prediction.\n")
+        return
+
+    print(f"\n[{label}] Actionable Counterfactuals (prediction flips!)")
+    print(shown_df.to_string(index=False))
+    print("\n")
+
+
+# Helper function to align data types
+def match_dtypes(query_instance, reference_df):
+    """
+    Forces the query instance (one row) to match the data types of the training data.
+    Crucial for DiCE categorical validation (prevents '1.0' vs '1' errors).
+    """
+    # Get columns (excluding Target)
+    cols = reference_df.drop('Target', axis=1).columns
+    
+    # Cast the query instance to the exact types of the reference dataframe
+    return query_instance.astype(reference_df[cols].dtypes)
+
+print("Helper function 'match_dtypes' defined.")
+
+
+
+def select_dropout_candidate(
+    X_test, 
+    model, 
+    df_reference, 
+    grade_threshold=11, 
+    approved_threshold=4,
+    verbose=True
+):
+    """
+    Finds the first student who:
+      - Is a debtor
+      - Has good academic performance (grade >= threshold, approved >= threshold)
+      - Is predicted to Dropout (0)
+    
+    Automatically matches dtypes and prints the profile.
+    Returns the query_instance as a single-row DataFrame.
+    """
+
+    # 1. Filter candidates
+    candidates = X_test[
+        (X_test['Debtor'] == 1) &
+        (X_test['Curricular units 1st sem (grade)'] >= grade_threshold) &
+        (X_test['Curricular units 1st sem (approved)'] >= approved_threshold)
+    ]
+
+    if verbose:
+        print(f"Candidates found: {len(candidates)}")
+
+    # 2. Select the first predicted dropout
+    query_instance = None
+    for idx, row in candidates.iterrows():
+        candidate = row.to_frame().T
+        if model.predict(candidate)[0] == 0:   # 0 = Dropout
+            query_instance = candidate
+            if verbose:
+                print(f"\nSelected Student #{idx} (Predicted Dropout)")
+            break
+
+    if query_instance is None:
+        print("\nNo matching dropout candidate found.")
+        return None
+
+    # 3. Match dtypes
+    query_instance = match_dtypes(query_instance, df_reference)
+
+    # 4. Display profile
+    if verbose:
+        print("\n--- Student Profile (Fixed Types) ---")
+        cols_to_show = [
+            'Tuition fees up to date', 
+            'Debtor',
+            'Marital status',
+            'Curricular units 1st sem (grade)'
+        ]
+        print(query_instance[cols_to_show])
+
+    return query_instance
+
+
+
+
+def select_academic_slide_candidate(
+    X_test, 
+    model, 
+    df_reference,
+    max_grade_threshold=10,       # failing or weak
+    max_approved_threshold=3,
+    verbose=True
+):
+    """
+    Finds a student who:
+      - Has tuition fees paid (1)
+      - Is a scholarship holder (1)
+      - Has bad academic performance (grade <= threshold, approved <= threshold)
+      - Is predicted to Dropout (0)
+    """
+
+    # 1. Filter candidates
+    candidates = X_test[
+        (X_test['Tuition fees up to date'] == 1) &
+        (X_test['Scholarship holder'] == 1) &
+        (X_test['Curricular units 1st sem (grade)'] <= max_grade_threshold) &
+        (X_test['Curricular units 1st sem (approved)'] <= max_approved_threshold)
+    ]
+
+    if verbose:
+        print(f"Candidates found: {len(candidates)}")
+
+    # 2. Select the first predicted dropout
+    query_instance = None
+    for idx, row in candidates.iterrows():
+        candidate = row.to_frame().T
+        if model.predict(candidate)[0] == 0:  # 0 = Dropout
+            query_instance = candidate
+            if verbose:
+                print(f"\nSelected Academic-Slide Student #{idx} (Predicted Dropout)")
+            break
+
+    if query_instance is None:
+        print("\n No suitable Academic Slide dropout candidate found.")
+        return None
+
+    # 3. Fix data types
+    query_instance = match_dtypes(query_instance, df_reference)
+
+    # 4. Display summary
+    if verbose:
+        print("\n--- Academic Slide Student Profile (Fixed Types) ---")
+        cols_to_show = [
+            'Tuition fees up to date',
+            'Scholarship holder',
+            'Debtor',
+            'Curricular units 1st sem (grade)',
+            'Curricular units 1st sem (approved)'
+        ]
+        print(query_instance[cols_to_show])
+
+    return query_instance
