@@ -2,3 +2,5 @@ src/utils/__pycache__/
 src/xgb_model/
 src/.DS_Store
 .venv/
+.python-version
+src/__pycache__/
