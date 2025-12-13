@@ -186,6 +186,105 @@ def plot_pdp_interaction(model, X_train, features_to_plot):
     plt.show()
 
 
+
+# ============================================================
+# ALE
+# ============================================================
+
+def plot_ale(model, X, features, n_bins=20, target_class=1, figsize=(18, 5)):
+    """
+    Computes and plots Accumulated Local Effects (ALE) for a list of features.
+    
+    Parameters:
+    - model: The trained model (must have predict_proba).
+    - X: Training data (pandas DataFrame).
+    - features: List of feature names (strings) to analyze.
+    - n_bins: Number of intervals to divide the feature into (default: 20).
+    - target_class: The class index to explain (default: 1 for 'Graduate').
+    - figsize: Tuple (width, height) for the plot.
+    """
+    
+    # --- Internal Helper: Calculate ALE for one feature ---
+    def calculate_single_ale(feature_name):
+        unique_vals = X[feature_name].unique()
+        
+        # Determine bins: Use unique values if few (categorical/discrete), else quantiles
+        if len(unique_vals) <= n_bins:
+            bins = np.sort(unique_vals)
+        else:
+            bins = np.unique(np.percentile(X[feature_name], np.linspace(0, 100, n_bins + 1)))
+        
+        ale = [0]  # Start with 0 effect
+        bin_centers = []
+        
+        for k in range(len(bins) - 1):
+            z_lower, z_upper = bins[k], bins[k+1]
+            
+            # Filter: Select only students who actually fall in this bin
+            if k == 0:
+                mask = (X[feature_name] >= z_lower) & (X[feature_name] <= z_upper)
+            else:
+                mask = (X[feature_name] > z_lower) & (X[feature_name] <= z_upper)
+                
+            subset = X[mask].copy()
+            
+            if len(subset) > 0:
+                # Create synthetic lower/upper bounds for these specific students
+                subset_lower, subset_upper = subset.copy(), subset.copy()
+                subset_lower[feature_name] = z_lower
+                subset_upper[feature_name] = z_upper
+                
+                # Predict probability changes
+                pred_lower = model.predict_proba(subset_lower)[:, target_class]
+                pred_upper = model.predict_proba(subset_upper)[:, target_class]
+                
+                # Average local effect
+                local_effect = np.mean(pred_upper - pred_lower)
+            else:
+                local_effect = 0
+                
+            ale.append(ale[-1] + local_effect)
+            bin_centers.append((z_lower + z_upper) / 2)
+            
+        # Center the ALE (so mean effect is 0)
+        ale = np.array(ale)
+        ale -= ale.mean()
+        
+        return bins, ale
+
+    # --- Plotting Logic ---
+    plt.figure(figsize=figsize)
+    
+    for i, feature in enumerate(features):
+        try:
+            ax = plt.subplot(1, len(features), i+1)
+            
+            # Calculate
+            bins, ale_values = calculate_single_ale(feature)
+            
+            # Plot ALE line
+            ax.plot(bins, ale_values, marker='o', markersize=4, label='ALE Effect')
+            
+            # Add Rug Plot (Data Density)
+            # We sample data if it's too large to keep plotting fast
+            rug_data = X[feature].sample(min(1000, len(X)), random_state=42)
+            ax.plot(rug_data, np.full_like(rug_data, np.min(ale_values)), 
+                    '|', color='k', alpha=0.3, label='Student Density')
+            
+            ax.set_title(f"ALE: {feature}")
+            ax.set_xlabel(feature)
+            if i == 0:
+                ax.set_ylabel(f"Effect on Probability (Class {target_class})")
+            ax.grid(True, alpha=0.3)
+            
+        except Exception as e:
+            print(f"Could not plot {feature}: {e}")
+
+    plt.suptitle("Accumulated Local Effects (ALE) Plots", y=1.05, fontsize=16)
+    plt.tight_layout()
+    plt.show()
+
+
 # ============================================================
 # SHAP
 # ============================================================
@@ -200,7 +299,7 @@ def apply_shap(model, X_train):
     return shap_values, explainer
 
 
-def plot_shap_instance(shap_values, explainer, X_train, instance_index):
+def plot_shap_instance(shap_values, explainer, X_train, y_train, instance_index):
 
     instance = X_train.loc[instance_index]
     print(instance)
@@ -423,3 +522,69 @@ def select_academic_slide_candidate(
         print(query_instance[cols_to_show])
 
     return query_instance
+
+
+import matplotlib.pyplot as plt
+
+def plot_intervention_impact(df_sim, student_id, threshold=0.5):
+    """
+    Visualize the impact of interventions on dropout risk and print a summary.
+
+    Parameters
+    ----------
+    df_sim : pd.DataFrame
+        Must contain columns ['Scenario', 'Risk']
+    student_id : int or str
+        Student identifier for the plot title
+    threshold : float, default=0.5
+        Safety threshold for high/low risk
+    """
+
+    # --- Visualization ---
+    plt.figure(figsize=(10, 5))
+
+    colors = ['#e74c3c' if x > threshold else '#2ecc71' for x in df_sim['Risk']]
+    bars = plt.barh(df_sim['Scenario'], df_sim['Risk'], color=colors)
+
+    plt.axvline(
+        threshold,
+        color='gray',
+        linestyle='--',
+        alpha=0.7,
+        label=f'Safety Threshold ({int(threshold * 100)}%)'
+    )
+
+    for bar, risk in zip(bars, df_sim['Risk']):
+        plt.text(
+            bar.get_width() + 0.01,
+            bar.get_y() + bar.get_height() / 2,
+            f"{risk:.1%}",
+            va='center',
+            fontweight='bold'
+        )
+
+    plt.xlim(0, 1.1)
+    plt.title(f"Impact of Interventions on Student #{student_id}", fontsize=14)
+    plt.xlabel("Dropout Probability")
+    plt.legend(loc='lower right')
+    plt.grid(axis='x', alpha=0.3)
+    plt.gca().invert_yaxis()
+
+    plt.show()
+
+    # --- Text Summary ---
+    final_risk = df_sim.iloc[-1]['Risk']
+    if final_risk > threshold:
+        print(
+            f"⚠️ WARNING: Even with combined interventions, "
+            f"risk remains high ({final_risk:.1%})."
+        )
+        print(
+            "Suggestion: This student may require non-academic support "
+            "(e.g., counseling) or manual review."
+        )
+    else:
+        print(
+            f"✅ SUCCESS: Interventions successfully reduce risk "
+            f"to {final_risk:.1%}."
+        )
