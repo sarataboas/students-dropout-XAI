@@ -3,7 +3,7 @@ import numpy as np
 import shap
 import matplotlib.pyplot as plt
 
-# --- Function 1: Prepare Candidates ---
+# ---- Function 1: Prepare Candidates ----
 def get_high_risk_students(model, file_path='data.csv', risk_threshold=0.85):
     """
     Loads 'Enrolled' students, predicts their dropout risk, 
