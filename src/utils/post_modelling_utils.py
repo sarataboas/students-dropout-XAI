@@ -3,7 +3,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import r2_score
 from sklearn.inspection import PartialDependenceDisplay
 from xgboost import XGBClassifier
-#from alibi.explainers import AnchorTabular
+from alibi.explainers import AnchorTabular
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
