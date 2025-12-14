@@ -576,15 +576,12 @@ def plot_intervention_impact(df_sim, student_id, threshold=0.5):
     final_risk = df_sim.iloc[-1]['Risk']
     if final_risk > threshold:
         print(
-            f"⚠️ WARNING: Even with combined interventions, "
+            f"Even with combined interventions, "
             f"risk remains high ({final_risk:.1%})."
         )
-        print(
-            "Suggestion: This student may require non-academic support "
-            "(e.g., counseling) or manual review."
-        )
+       
     else:
         print(
-            f"✅ SUCCESS: Interventions successfully reduce risk "
+            f" SUCCESS: Interventions successfully reduce risk "
             f"to {final_risk:.1%}."
         )
